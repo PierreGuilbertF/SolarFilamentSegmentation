@@ -2,6 +2,7 @@ from pathlib import Path
 from dataset_loader import SolarFilamentDatasetLoader
 from model import Unet
 import json
+import os
 from time import perf_counter
 
 import cv2
@@ -14,7 +15,45 @@ def normalized_mse_loss(predicted_masks: torch.Tensor, masks: torch.Tensor):
     return (predicted_masks - masks).square().sum() / masks.sum().clamp_min(1.0)
 
 
-def ExportBatch(images: torch.tensor, masks: torch.tensor):
+def initialize_data_worker(worker_id):
+    cv2.setNumThreads(1)
+
+
+def create_training_dataloader(dataset, batch_size, device, config):
+    cpu_count = os.cpu_count() or 1
+    worker_limit = {"cpu": min(2, cpu_count // 4), "mps": 2, "cuda": 4}[device.type]
+    default_workers = min(worker_limit, max(0, cpu_count - 1))
+    num_workers = config.get("num_workers", default_workers)
+    if type(num_workers) is not int or num_workers < 0:
+        raise ValueError("num_workers must be a non-negative integer")
+
+    worker_options = {}
+    if num_workers > 0:
+        prefetch_factor = config.get("prefetch_factor", 2)
+        if type(prefetch_factor) is not int or prefetch_factor < 1:
+            raise ValueError("prefetch_factor must be a positive integer")
+        worker_options = {
+            "prefetch_factor": prefetch_factor,
+            "persistent_workers": True,
+            "worker_init_fn": initialize_data_worker,
+            "multiprocessing_context": "spawn",
+        }
+
+    print(f"Using: {num_workers} workers for batch generation")
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=device.type == "cuda",
+        **worker_options,
+    )
+
+
+def ExportBatch(
+    images: torch.tensor, masks: torch.tensor, predicted_masks: torch.tensor
+):
+    print(f"image shape: {images.shape}")
     for k in range(images.shape[0]):
         image = (
             images[k, :, :]
@@ -37,10 +76,22 @@ def ExportBatch(images: torch.tensor, masks: torch.tensor):
             .to(torch.uint8)
             .numpy()
         )
+        predicted_mask = (
+            predicted_masks[k, 0, :, :]
+            .detach()
+            .cpu()
+            .clamp(0, 1)
+            .mul(255.0)
+            .round()
+            .to(torch.uint8)
+            .numpy()
+        )
         filename = f"/Users/pierre.guilbert/dev/SolarFilaments/output/visualization/{k}_image.png"
         cv2.imwrite(filename, image)
         filename = f"/Users/pierre.guilbert/dev/SolarFilaments/output/visualization/{k}_mask.png"
         cv2.imwrite(filename, mask)
+        filename = f"/Users/pierre.guilbert/dev/SolarFilaments/output/visualization/{k}_predicted_mask.png"
+        cv2.imwrite(filename, predicted_mask)
 
 
 def train_model(config: Path, training_set_payload: Path, output_dir: Path):
@@ -51,12 +102,28 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path):
     batch_size = config_payload["batch_size"]
     num_epochs = config_payload["epochs"]
 
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
+    print(f"Training device: {device}", flush=True)
+
     # Initialize the datasetloader
     dataset_loader = SolarFilamentDatasetLoader(training_set_payload, config)
-    train_dataloader = DataLoader(dataset_loader, batch_size=batch_size, shuffle=True)
+    train_dataloader = create_training_dataloader(
+        dataset_loader, batch_size, device, config_payload
+    )
+    print(
+        f"Data loading: {train_dataloader.num_workers} workers | "
+        f"Prefetch: {train_dataloader.prefetch_factor} | "
+        f"Pinned memory: {train_dataloader.pin_memory}",
+        flush=True,
+    )
 
     # Initialize the model
-    model = Unet(config)
+    model = Unet(config).to(device)
 
     # Initialize the optimizer
     adam_optimizer = torch.optim.Adam(
@@ -66,6 +133,7 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path):
     training_report = []
 
     model.train()
+    # model = torch.compile(model)
     for epoch in range(num_epochs):
         epoch_start = perf_counter()
         total_loss = 0.0
@@ -75,6 +143,8 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path):
         # Include data loading and mask generation in each batch measurement.
         batch_start = perf_counter()
         for iteration_idx, (images, masks) in enumerate(train_dataloader):
+            images = images.to(device, non_blocking=device.type == "cuda")
+            masks = masks.to(device, non_blocking=device.type == "cuda")
             adam_optimizer.zero_grad(set_to_none=True)
             predicted_masks = model(images)
             loss = normalized_mse_loss(predicted_masks, masks)
@@ -84,6 +154,10 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path):
             batch_loss = loss.item()
             total_loss += batch_loss * images.size(0)
             num_samples += images.size(0)
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            elif device.type == "mps":
+                torch.mps.synchronize()
             batch_elapsed = perf_counter() - batch_start
             batch_times.append(batch_elapsed)
 
@@ -110,5 +184,8 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path):
                 "batch_elapsed_seconds": batch_times,
             }
         )
+
+        ExportBatch(images, masks, predicted_masks)
+
         with (output_dir / "training_report.json").open("w", encoding="utf-8") as file:
             json.dump(training_report, file, indent=2)

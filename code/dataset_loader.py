@@ -20,10 +20,14 @@ class SolarFilamentDatasetLoader(Dataset):
             type(value) is not int or value <= 0
             for value in (self.input_height, self.input_width, stride)
         ):
-            raise ValueError("Input dimensions and space_to_depth_stride must be positive integers")
+            raise ValueError(
+                "Input dimensions and space_to_depth_stride must be positive integers"
+            )
 
         if self.input_height % stride or self.input_width % stride:
-            raise ValueError("Input dimensions must be divisible by space_to_depth_stride")
+            raise ValueError(
+                "Input dimensions must be divisible by space_to_depth_stride"
+            )
 
         self.mask_height = self.input_height // stride
         self.mask_width = self.input_width // stride
@@ -70,9 +74,14 @@ class SolarFilamentDatasetLoader(Dataset):
             if self.input_height <= height and self.input_width <= width
             else cv2.INTER_LINEAR
         )
-        opencv_image = cv2.resize(
-            opencv_image, (self.input_width, self.input_height), interpolation=interpolation
-        ).astype(np.float32) / 255.0
+        opencv_image = (
+            cv2.resize(
+                opencv_image,
+                (self.input_width, self.input_height),
+                interpolation=interpolation,
+            ).astype(np.float32)
+            / 255.0
+        )
         image = torch.from_numpy(opencv_image).unsqueeze(0)  # [1, H, W]
 
         polygons = self.polygons_by_image[self.image_ids[idx]]
@@ -82,7 +91,9 @@ class SolarFilamentDatasetLoader(Dataset):
                 (np.asarray(polygon).reshape(-1, 2) * scale).ravel().tolist()
                 for polygon in polygons
             ]
-            rles = mask_utils.frPyObjects(scaled_polygons, self.mask_height, self.mask_width)
+            rles = mask_utils.frPyObjects(
+                scaled_polygons, self.mask_height, self.mask_width
+            )
             mask = mask_utils.decode(mask_utils.merge(rles))
         else:
             mask = np.zeros((self.mask_height, self.mask_width), dtype=np.uint8)

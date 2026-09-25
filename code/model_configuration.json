@@ -1,4 +1,6 @@
 {
+  "batch_size": 16,
+  "epochs": 10,
   "input_dimensions": [512, 512],
   "space_to_depth_stride": 1,
   "num_blocks": 2,

@@ -47,6 +47,7 @@ class ConvWithBN(nn.Module):
     def forward(self, x):
         return self.activation(self.bn(self.conv(x)))
 
+
 class TransposeConvWithBN(nn.Module):
     def __init__(
         self,
@@ -74,11 +75,14 @@ class TransposeConvWithBN(nn.Module):
     def forward(self, x):
         return self.activation(self.bn(self.conv(x)))
 
+
 class ResidualDWBlock(nn.Module):
     def __init__(self, channels, kernel_size, drop_out=False, activation="relu"):
         super().__init__()
         block = [
-            nn.Conv2d(channels, channels, kernel_size, groups=channels, padding=1, bias=False),
+            nn.Conv2d(
+                channels, channels, kernel_size, groups=channels, padding=1, bias=False
+            ),
             nn.Conv2d(channels, channels, 1, bias=False),
         ]
         block.append(nn.BatchNorm2d(channels, momentum=0.1))
@@ -96,12 +100,9 @@ class ResidualDWBlock(nn.Module):
     def forward(self, x):
         return x + self.residual(x)
 
+
 class AutoEncoderWithSkips(nn.Module):
-    def __init__(
-        self,
-        channels: int,
-        config: Path
-    ):
+    def __init__(self, channels: int, config: Path):
         super().__init__()
 
         with config.open(encoding="utf-8") as file:
@@ -129,7 +130,9 @@ class AutoEncoderWithSkips(nn.Module):
                 nn.Sequential(
                     *[
                         ResidualDWBlock(
-                            current_channels, self.conv_kernel_size, activation = self.activation
+                            current_channels,
+                            self.conv_kernel_size,
+                            activation=self.activation,
                         )
                         for _ in range(self.num_conv_per_block)
                     ]
@@ -141,7 +144,9 @@ class AutoEncoderWithSkips(nn.Module):
                 nn.Sequential(
                     *[
                         ResidualDWBlock(
-                            current_channels, self.conv_kernel_size, activation = self.activation
+                            current_channels,
+                            self.conv_kernel_size,
+                            activation=self.activation,
                         )
                         for _ in range(self.num_conv_per_block)
                     ]
@@ -171,8 +176,12 @@ class AutoEncoderWithSkips(nn.Module):
             )
 
             # Fusion block between downsampling and upsampling blocks
-            fusions_1.append(nn.Conv2d(current_channels, current_channels, 1, bias=True))
-            fusions_2.append(nn.Conv2d(current_channels, current_channels, 1, bias=True))
+            fusions_1.append(
+                nn.Conv2d(current_channels, current_channels, 1, bias=True)
+            )
+            fusions_2.append(
+                nn.Conv2d(current_channels, current_channels, 1, bias=True)
+            )
 
         self.down_blocks = nn.ModuleList(down_blocks)
         self.up_blocks = nn.ModuleList(up_blocks)
@@ -186,9 +195,9 @@ class AutoEncoderWithSkips(nn.Module):
         self.middle_processing = nn.Sequential(
             *[
                 ResidualDWBlock(
-                    2** self.num_blocks * channels,
-                    self.conv_kernel_size, activation = self.activation
-
+                    2**self.num_blocks * channels,
+                    self.conv_kernel_size,
+                    activation=self.activation,
                 )
                 for _ in range(self.num_conv_per_block)
             ]
@@ -215,6 +224,7 @@ class AutoEncoderWithSkips(nn.Module):
             x = self.up_blocks[reverse_k](x)
 
         return x
+
 
 class Unet(nn.Module):
     def __init__(self, config: Path) -> None:

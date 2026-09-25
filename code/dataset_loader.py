@@ -6,10 +6,15 @@ import numpy as np
 import torch
 from pycocotools import mask as mask_utils
 from torch.utils.data import Dataset
+from torchvision.transforms import ColorJitter, InterpolationMode, RandomAffine
+from torchvision.transforms import functional as TF
 
 
 class SolarFilamentDatasetLoader(Dataset):
-    def __init__(self, training_set_payload: Path, config_payload: Path):
+    def __init__(self, training_set_payload: Path, config_payload: Path, *, augment=True):
+        self.augment = augment
+        self.geometric_augmentation = RandomAffine(degrees=15, translate=(0.02, 0.02))
+        self.contrast_augmentation = ColorJitter(contrast=0.2)
         with config_payload.open(encoding="utf-8") as file:
             config = json.load(file)
         # Dimensions are stored as [height, width].
@@ -63,6 +68,39 @@ class SolarFilamentDatasetLoader(Dataset):
     def __len__(self):
         return len(self.images_name)
 
+    def _augment(self, image, mask):
+        angle, translation, scale, shear = RandomAffine.get_params(
+            self.geometric_augmentation.degrees,
+            self.geometric_augmentation.translate,
+            self.geometric_augmentation.scale,
+            self.geometric_augmentation.shear,
+            [self.mask_width, self.mask_height],
+        )
+        # Sample translations on the mask grid, then map them to image pixels.
+        image_translation = [
+            translation[0] * (self.input_width // self.mask_width),
+            translation[1] * (self.input_height // self.mask_height),
+        ]
+        image = TF.affine(
+            self.contrast_augmentation(image),
+            angle=angle,
+            translate=image_translation,
+            scale=scale,
+            shear=shear,
+            interpolation=InterpolationMode.BILINEAR,
+            fill=0,
+        )
+        mask = TF.affine(
+            mask,
+            angle=angle,
+            translate=translation,
+            scale=scale,
+            shear=shear,
+            interpolation=InterpolationMode.NEAREST,
+            fill=0,
+        )
+        return image, mask
+
     def __getitem__(self, idx):
         opencv_image = cv2.imread(self.images_name[idx], cv2.IMREAD_GRAYSCALE)
         if opencv_image is None:
@@ -99,4 +137,6 @@ class SolarFilamentDatasetLoader(Dataset):
             mask = np.zeros((self.mask_height, self.mask_width), dtype=np.uint8)
 
         mask = torch.from_numpy(mask).to(dtype=torch.float32).unsqueeze(0)
+        if self.augment:
+            image, mask = self._augment(image, mask)
         return image, mask

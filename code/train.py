@@ -130,6 +130,14 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path):
     adam_optimizer = torch.optim.Adam(
         model.parameters(), lr=config_payload.get("learning_rate", 1e-3)
     )
+
+    # Learning rate scheduler
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        adam_optimizer,
+        T_max=num_epochs * len(train_dataloader),
+        eta_min=config_payload.get("min_learning_rate", 0.0),
+    )
+
     output_dir.mkdir(parents=True, exist_ok=True)
     training_report = []
 
@@ -151,7 +159,9 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path):
                 predicted_masks = model(images)
             loss = normalized_mse_loss(predicted_masks.float(), masks.float())
             loss.backward()
+            learning_rate = adam_optimizer.param_groups[0]["lr"]
             adam_optimizer.step()
+            scheduler.step()
 
             batch_loss = loss.item()
             total_loss += batch_loss * images.size(0)
@@ -163,12 +173,14 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path):
             batch_elapsed = perf_counter() - batch_start
             batch_times.append(batch_elapsed)
 
-            print(
-                f"Epoch {epoch + 1}/{num_epochs} | "
-                f"Batch {iteration_idx + 1}/{len(train_dataloader)} | "
-                f"Loss: {batch_loss:.6f} | Time: {batch_elapsed:.3f}s",
-                flush=True,
-            )
+            if iteration_idx % 25 == 0:
+                print(
+                    f"Epoch {epoch + 1}/{num_epochs} | "
+                    f"Batch {iteration_idx + 1}/{len(train_dataloader)} | "
+                    f"Loss: {batch_loss:.6f} | LR: {learning_rate:.3e} | "
+                    f"Time: {batch_elapsed:.3f}s",
+                    flush=True,
+                )
             batch_start = perf_counter()
 
         epoch_elapsed = perf_counter() - epoch_start
@@ -178,6 +190,7 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path):
             f"Time: {epoch_elapsed:.3f}s",
             flush=True,
         )
+
         training_report.append(
             {
                 "epoch": epoch + 1,
@@ -187,7 +200,15 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path):
             }
         )
 
-        ExportBatch(images, masks, predicted_masks)
+        # ExportBatch(images, masks, predicted_masks)
+
+        torch.save(
+            {
+                "model_state_dict": model._orig_mod.state_dict(),
+                "config": config_payload,
+            },
+            output_dir / "model.pt",
+        )
 
         with (output_dir / "training_report.json").open("w", encoding="utf-8") as file:
             json.dump(training_report, file, indent=2)

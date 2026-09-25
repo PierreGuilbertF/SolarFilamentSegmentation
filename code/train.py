@@ -21,7 +21,7 @@ def initialize_data_worker(worker_id):
 
 def create_training_dataloader(dataset, batch_size, device, config):
     cpu_count = os.cpu_count() or 1
-    worker_limit = {"cpu": min(2, cpu_count // 4), "mps": 2, "cuda": 4}[device.type]
+    worker_limit = {"cpu": min(2, cpu_count // 4), "mps": 2, "cuda": 8}[device.type]
     default_workers = min(worker_limit, max(0, cpu_count - 1))
     num_workers = config.get("num_workers", default_workers)
     if type(num_workers) is not int or num_workers < 0:
@@ -29,7 +29,7 @@ def create_training_dataloader(dataset, batch_size, device, config):
 
     worker_options = {}
     if num_workers > 0:
-        prefetch_factor = config.get("prefetch_factor", 2)
+        prefetch_factor = config.get("prefetch_factor", 4)
         if type(prefetch_factor) is not int or prefetch_factor < 1:
             raise ValueError("prefetch_factor must be a positive integer")
         worker_options = {
@@ -86,11 +86,11 @@ def ExportBatch(
             .to(torch.uint8)
             .numpy()
         )
-        filename = f"/Users/pierre.guilbert/dev/SolarFilaments/output/visualization/{k}_image.png"
+        filename = f"/home/humans/pierre.guilbert/dev/SolarFilamentSegmentation/output/visualization/{k}_image.png"
         cv2.imwrite(filename, image)
-        filename = f"/Users/pierre.guilbert/dev/SolarFilaments/output/visualization/{k}_mask.png"
+        filename = f"/home/humans/pierre.guilbert/dev/SolarFilamentSegmentation/output/visualization/{k}_mask.png"
         cv2.imwrite(filename, mask)
-        filename = f"/Users/pierre.guilbert/dev/SolarFilaments/output/visualization/{k}_predicted_mask.png"
+        filename = f"/home/humans/pierre.guilbert/dev/SolarFilamentSegmentation/output/visualization/{k}_predicted_mask.png"
         cv2.imwrite(filename, predicted_mask)
 
 
@@ -124,6 +124,7 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path):
 
     # Initialize the model
     model = Unet(config).to(device)
+    model = torch.compile(model, mode="default")
 
     # Initialize the optimizer
     adam_optimizer = torch.optim.Adam(
@@ -146,8 +147,9 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path):
             images = images.to(device, non_blocking=device.type == "cuda")
             masks = masks.to(device, non_blocking=device.type == "cuda")
             adam_optimizer.zero_grad(set_to_none=True)
-            predicted_masks = model(images)
-            loss = normalized_mse_loss(predicted_masks, masks)
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                predicted_masks = model(images)
+            loss = normalized_mse_loss(predicted_masks.float(), masks.float())
             loss.backward()
             adam_optimizer.step()
 

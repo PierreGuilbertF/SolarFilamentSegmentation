@@ -189,7 +189,7 @@ class AutoEncoderWithSkips(nn.Module):
         self.upscales = nn.ModuleList(upscales)
         self.fusions_1 = nn.ModuleList(fusions_1)
         self.fusions_2 = nn.ModuleList(fusions_2)
-        self.fusion_activation = get_activation_function("relu", 0)
+        self.fusion_activation = nn.LeakyReLU(negative_slope=0.025)
 
         # lowest resolution processing
         self.middle_processing = nn.Sequential(
@@ -235,21 +235,24 @@ class Unet(nn.Module):
 
         self.activation = config_payload["activation_function"]
         self.space_to_depth_stride = config_payload["space_to_depth_stride"]
+        self.input_dim = config_payload["input_dim"]
 
         # Convert spatial dimension to depth dimension
         self.space_to_depth = ConvWithBN(
             1,
-            self.space_to_depth_stride**2,
+            self.input_dim,
             self.space_to_depth_stride,
             self.space_to_depth_stride,
             activation=self.activation,
         )
 
         # Core of the unet
-        self.auto_encoder = AutoEncoderWithSkips(self.space_to_depth_stride**2, config)
+        self.auto_encoder = AutoEncoderWithSkips(self.input_dim, config)
 
         # Decoder head
-        self.decoder = torch.nn.Conv2d(self.space_to_depth_stride**2, 1, 1, 1)
+        self.decoder = torch.nn.Conv2d(self.input_dim, 1, 1, 1, bias=False)
+        # Start near zero without blocking gradients through a zero-weight head.
+        nn.init.normal_(self.decoder.weight, mean=0.0, std=1e-4)
 
     def forward(self, x):
         return self.decoder(self.auto_encoder(self.space_to_depth(x)))

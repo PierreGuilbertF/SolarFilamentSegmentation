@@ -1,0 +1,8 @@
+{
+  "input_dimensions": [512, 512],
+  "space_to_depth_stride": 1,
+  "num_blocks": 2,
+  "num_conv_per_block": 3,
+  "conv_kernel_size": 3,
+  "activation_function": "relu"
+}

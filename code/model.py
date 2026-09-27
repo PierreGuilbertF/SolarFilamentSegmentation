@@ -77,7 +77,7 @@ class TransposeConvWithBN(nn.Module):
 
 
 class ResidualDWBlock(nn.Module):
-    def __init__(self, channels, kernel_size, drop_out=False, activation="relu"):
+    def __init__(self, channels, kernel_size, drop_out=True, activation="relu"):
         super().__init__()
         block = [
             nn.Conv2d(
@@ -90,7 +90,7 @@ class ResidualDWBlock(nn.Module):
 
         # drop-out is optional
         if drop_out:
-            block.append(nn.Dropout2d(p=0.25))
+            block.append(nn.Dropout2d(p=0.15))
 
         block.append(nn.Conv2d(channels, channels, 3, groups=channels, padding=1))
         block.append(get_activation_function(activation, channels))

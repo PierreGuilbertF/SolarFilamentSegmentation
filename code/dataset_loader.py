@@ -99,6 +99,12 @@ class SolarFilamentDatasetLoader(Dataset):
             interpolation=InterpolationMode.NEAREST,
             fill=0,
         )
+        if torch.rand(()).item() < 0.2:
+            sigma = torch.empty(()).uniform_(0.3, 0.8).item()
+            image = TF.gaussian_blur(image, kernel_size=7, sigma=sigma)
+        if torch.rand(()).item() < 0.2:
+            sigma = torch.empty(()).uniform_(0.005, 0.015).item()
+            image = (image + sigma * torch.randn_like(image)).clamp(0.0, 1.0)
         return image, mask
 
     def __getitem__(self, idx):

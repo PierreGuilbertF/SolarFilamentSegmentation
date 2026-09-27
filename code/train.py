@@ -24,7 +24,7 @@ def initialize_data_worker(worker_id):
 
 def create_training_dataloader(dataset, batch_size, device, config):
     cpu_count = os.cpu_count() or 1
-    worker_limit = {"cpu": min(2, cpu_count // 4), "mps": 2, "cuda": 10}[device.type]
+    worker_limit = {"cpu": min(2, cpu_count // 4), "mps": 2, "cuda": 4}[device.type]
     default_workers = min(worker_limit, max(0, cpu_count - 1))
     num_workers = config.get("num_workers", default_workers)
     if type(num_workers) is not int or num_workers < 0:
@@ -32,7 +32,7 @@ def create_training_dataloader(dataset, batch_size, device, config):
 
     worker_options = {}
     if num_workers > 0:
-        prefetch_factor = config.get("prefetch_factor", 5)
+        prefetch_factor = config.get("prefetch_factor", 4)
         if type(prefetch_factor) is not int or prefetch_factor < 1:
             raise ValueError("prefetch_factor must be a positive integer")
         worker_options = {

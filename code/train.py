@@ -176,14 +176,14 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path):
             batch_elapsed = perf_counter() - batch_start
             batch_times.append(batch_elapsed)
 
-            if iteration_idx % 25 == 0:
-                print(
-                    f"Epoch {epoch + 1}/{num_epochs} | "
-                    f"Batch {iteration_idx + 1}/{len(train_dataloader)} | "
-                    f"Loss: {batch_loss:.6f} | LR: {learning_rate:.3e} | "
-                    f"Time: {batch_elapsed:.3f}s",
-                    flush=True,
-                )
+            #if iteration_idx % 25 == 0:
+            #    print(
+            #        f"Epoch {epoch + 1}/{num_epochs} | "
+            #        f"Batch {iteration_idx + 1}/{len(train_dataloader)} | "
+            #        f"Loss: {batch_loss:.6f} | LR: {learning_rate:.3e} | "
+            #        f"Time: {batch_elapsed:.3f}s",
+            #        flush=True,
+            #    )
             batch_start = perf_counter()
 
         epoch_elapsed = perf_counter() - epoch_start

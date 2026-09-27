@@ -75,6 +75,34 @@ class TransposeConvWithBN(nn.Module):
     def forward(self, x):
         return self.activation(self.bn(self.conv(x)))
 
+class ResidualBlock(nn.Module):
+    def __init__(self, channels, kernel_size, drop_out=True, activation="relu"):
+        super().__init__()
+        block = [
+            nn.Conv2d(
+                channels, channels, kernel_size, padding=1, bias=False
+            )
+        ]
+        block.append(nn.BatchNorm2d(channels, momentum=0.1))
+        block.append(get_activation_function(activation, channels))
+        block.append(nn.Conv2d(
+                channels,
+                channels,
+                kernel_size,
+                padding=1,
+                bias=False
+            ))
+        block.append(nn.BatchNorm2d(channels))
+
+        # drop-out is optional
+        if drop_out:
+            block.append(nn.Dropout2d(p=0.075))
+
+        self.residual = nn.Sequential(*block)
+        self.activation = get_activation_function(activation, channels)
+
+    def forward(self, x):
+        return self.activation(x + self.residual(x))
 
 class ResidualDWBlock(nn.Module):
     def __init__(self, channels, kernel_size, drop_out=True, activation="relu"):
@@ -90,7 +118,7 @@ class ResidualDWBlock(nn.Module):
 
         # drop-out is optional
         if drop_out:
-            block.append(nn.Dropout2d(p=0.15))
+            block.append(nn.Dropout2d(p=0.075))
 
         block.append(nn.Conv2d(channels, channels, 3, groups=channels, padding=1))
         block.append(get_activation_function(activation, channels))
@@ -129,7 +157,7 @@ class AutoEncoderWithSkips(nn.Module):
             down_blocks.append(
                 nn.Sequential(
                     *[
-                        ResidualDWBlock(
+                        ResidualBlock(
                             current_channels,
                             self.conv_kernel_size,
                             activation=self.activation,
@@ -143,7 +171,7 @@ class AutoEncoderWithSkips(nn.Module):
             up_blocks.append(
                 nn.Sequential(
                     *[
-                        ResidualDWBlock(
+                        ResidualBlock(
                             current_channels,
                             self.conv_kernel_size,
                             activation=self.activation,
@@ -194,7 +222,7 @@ class AutoEncoderWithSkips(nn.Module):
         # lowest resolution processing
         self.middle_processing = nn.Sequential(
             *[
-                ResidualDWBlock(
+                ResidualBlock(
                     2**self.num_blocks * channels,
                     self.conv_kernel_size,
                     activation=self.activation,

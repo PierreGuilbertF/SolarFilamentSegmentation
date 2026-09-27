@@ -11,8 +11,11 @@ import torch
 from torch.utils.data import DataLoader
 
 
-def normalized_mse_loss(predicted_masks: torch.Tensor, masks: torch.Tensor):
-    return (predicted_masks - masks).square().sum() / masks.sum().clamp_min(1.0)
+def normalized_mse_loss(predicted_masks, masks, foreground_weight=3.0):
+    weights = 1.0 + (foreground_weight - 1.0) * masks
+    errors = (predicted_masks - masks).square()
+    denominator = (foreground_weight * masks.sum()).clamp_min(1.0)
+    return (weights * errors).sum() / denominator
 
 
 def initialize_data_worker(worker_id):
@@ -21,7 +24,7 @@ def initialize_data_worker(worker_id):
 
 def create_training_dataloader(dataset, batch_size, device, config):
     cpu_count = os.cpu_count() or 1
-    worker_limit = {"cpu": min(2, cpu_count // 4), "mps": 2, "cuda": 8}[device.type]
+    worker_limit = {"cpu": min(2, cpu_count // 4), "mps": 2, "cuda": 10}[device.type]
     default_workers = min(worker_limit, max(0, cpu_count - 1))
     num_workers = config.get("num_workers", default_workers)
     if type(num_workers) is not int or num_workers < 0:
@@ -29,7 +32,7 @@ def create_training_dataloader(dataset, batch_size, device, config):
 
     worker_options = {}
     if num_workers > 0:
-        prefetch_factor = config.get("prefetch_factor", 4)
+        prefetch_factor = config.get("prefetch_factor", 5)
         if type(prefetch_factor) is not int or prefetch_factor < 1:
             raise ValueError("prefetch_factor must be a positive integer")
         worker_options = {
@@ -200,7 +203,7 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path):
             }
         )
 
-        # ExportBatch(images, masks, predicted_masks)
+        #ExportBatch(images, masks, predicted_masks)
 
         torch.save(
             {

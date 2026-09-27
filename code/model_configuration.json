@@ -1,10 +1,10 @@
 {
   "batch_size": 8,
-  "epochs": 25,
-  "input_dimensions": [512, 512],
+  "epochs": 50,
+  "input_dimensions": [736, 736],
   "input_dim": 16,
   "space_to_depth_stride": 1,
-  "num_blocks": 3,
+  "num_blocks": 5,
   "num_conv_per_block": 5,
   "conv_kernel_size": 3,
   "activation_function": "prelu"

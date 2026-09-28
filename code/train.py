@@ -14,8 +14,7 @@ from torch.utils.data import DataLoader
 def normalized_mse_loss(predicted_masks, masks, foreground_weight=3.0):
     weights = 1.0 + (foreground_weight - 1.0) * masks
     errors = (predicted_masks - masks).square()
-    denominator = (foreground_weight * masks.sum()).clamp_min(1.0)
-    return (weights * errors).sum() / denominator
+    return (weights * errors).mean()
 
 
 def initialize_data_worker(worker_id):
@@ -114,7 +113,7 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path):
     print(f"Training device: {device}", flush=True)
 
     # Initialize the datasetloader
-    dataset_loader = SolarFilamentDatasetLoader(training_set_payload, config)
+    dataset_loader = SolarFilamentDatasetLoader(training_set_payload, config, augment=False)
     train_dataloader = create_training_dataloader(
         dataset_loader, batch_size, device, config_payload
     )

@@ -9,7 +9,7 @@ def get_activation_function(activation_name: str, out_channels: int):
     if activation_name == "identity":
         return nn.Identity()
     elif activation_name == "relu":
-        return nn.ReLU()
+        return nn.ReLU(inplace=True)
     elif activation_name == "relu6":
         return nn.ReLU6()
     elif activation_name == "prelu":
@@ -18,6 +18,8 @@ def get_activation_function(activation_name: str, out_channels: int):
         return nn.SiLU()
     elif activation_name == "gelu":
         return nn.GELU()
+    elif activation_name == "leaky_relu":
+        return nn.LeakyReLU(negative_slope=0.2, inplace=True)
 
 
 class ConvWithBN(nn.Module):
@@ -75,8 +77,23 @@ class TransposeConvWithBN(nn.Module):
     def forward(self, x):
         return self.activation(self.bn(self.conv(x)))
 
+class SqueezeAndExcite(nn.Module):
+    def __init__(self, c, r=16, activation="relu"):
+        super().__init__()
+        c_reduced = max(1, c // r)
+        self.excite = nn.Sequential(
+            nn.Conv2d(c, c_reduced, kernel_size=1, bias=True),
+            get_activation_function(activation, c_reduced),
+            nn.Conv2d(c_reduced, c, kernel_size=1, bias=True),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        return x * self.excite(x.mean((2, 3), keepdim=True))
+
+
 class ResidualBlock(nn.Module):
-    def __init__(self, channels, kernel_size, drop_out=True, activation="relu"):
+    def __init__(self, channels, kernel_size, drop_out=False, activation="relu"):
         super().__init__()
         block = [
             nn.Conv2d(
@@ -90,13 +107,12 @@ class ResidualBlock(nn.Module):
                 channels,
                 kernel_size,
                 padding=1,
-                bias=False
+                bias=True
             ))
-        block.append(nn.BatchNorm2d(channels))
 
         # drop-out is optional
         if drop_out:
-            block.append(nn.Dropout2d(p=0.075))
+            block.append(nn.Dropout2d(p=0.1))
 
         self.residual = nn.Sequential(*block)
         self.activation = get_activation_function(activation, channels)
@@ -140,6 +156,7 @@ class AutoEncoderWithSkips(nn.Module):
         self.num_blocks = config_payload["num_blocks"]
         self.num_conv_per_block = config_payload["num_conv_per_block"]
         self.conv_kernel_size = config_payload["conv_kernel_size"]
+        self.squeeze_and_excite = config_payload["squeeze_and_excite"]
 
         down_blocks = []
         downscales = []
@@ -154,32 +171,38 @@ class AutoEncoderWithSkips(nn.Module):
             next_channels = 2 ** (k + 1) * channels
 
             # Convolution block for a given resolution during downsampling path
-            down_blocks.append(
-                nn.Sequential(
-                    *[
-                        ResidualBlock(
-                            current_channels,
-                            self.conv_kernel_size,
-                            activation=self.activation,
-                        )
-                        for _ in range(self.num_conv_per_block)
-                    ]
+            layers_down = [
+                ResidualBlock(
+                    current_channels,
+                    self.conv_kernel_size,
+                    activation=self.activation,
                 )
-            )
+                for _ in range(self.num_conv_per_block)
+            ]
+            # Squeeze and excite to have a full image receptive field
+            # By selecting the channels to express
+            if self.squeeze_and_excite:
+                layers_down.append(
+                    SqueezeAndExcite(current_channels, activation=self.activation)
+                )
+            down_blocks.append(nn.Sequential(*layers_down))
 
             # Convolution block for a given resolution during upsampling path
-            up_blocks.append(
-                nn.Sequential(
-                    *[
-                        ResidualBlock(
-                            current_channels,
-                            self.conv_kernel_size,
-                            activation=self.activation,
-                        )
-                        for _ in range(self.num_conv_per_block)
-                    ]
+            layers_up = [
+                    ResidualBlock(
+                        current_channels,
+                        self.conv_kernel_size,
+                        activation=self.activation,
+                    )
+                    for _ in range(self.num_conv_per_block)
+             ]
+            # Squeeze and excite to have a full image receptive field
+            # By selecting the channels to express
+            if self.squeeze_and_excite:
+                layers_up.append(
+                    SqueezeAndExcite(current_channels, activation=self.activation)
                 )
-            )
+            up_blocks.append(nn.Sequential(*layers_up))
 
             # Downsampling convolution
             downscales.append(
@@ -217,7 +240,7 @@ class AutoEncoderWithSkips(nn.Module):
         self.upscales = nn.ModuleList(upscales)
         self.fusions_1 = nn.ModuleList(fusions_1)
         self.fusions_2 = nn.ModuleList(fusions_2)
-        self.fusion_activation = nn.LeakyReLU(negative_slope=0.025)
+        self.fusion_activation = nn.LeakyReLU(negative_slope=0.2)
 
         # lowest resolution processing
         self.middle_processing = nn.Sequential(

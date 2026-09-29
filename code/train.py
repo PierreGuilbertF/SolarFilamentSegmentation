@@ -10,7 +10,7 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
-EVAL_EVERY = 75
+EVAL_EVERY = 10
 
 def normalized_mse_loss(predicted_masks, masks, foreground_weight=3.0):
     weights = 1.0 + (foreground_weight - 1.0) * masks
@@ -263,8 +263,8 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path,
         mean_loss = (total_loss / num_samples).item()
         validation = None
         validation_elapsed = 0.0
-        if epoch % EVAL_EVERY == 0:
-            ExportBatch(images, masks, predicted_masks)
+        #if epoch % EVAL_EVERY == 0:
+        #    ExportBatch(images, masks, predicted_masks)
         if validation_dataloader is not None and epoch % EVAL_EVERY == 0:
             validation_start = perf_counter()
             validation = validate_model(raw_model, validation_dataloader, device, gt_by_id, validation_threshold)

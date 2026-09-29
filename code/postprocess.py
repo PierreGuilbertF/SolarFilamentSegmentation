@@ -77,7 +77,7 @@ def predict_heatmap(model, image_path, config, device):
     interpolation = cv2.INTER_AREA if height <= image.shape[0] and width <= image.shape[1] else cv2.INTER_LINEAR
     image = cv2.resize(image, (width, height), interpolation=interpolation)
     image = torch.from_numpy(image.astype(np.float32) / 255.0)[None, None].to(device)
-    prediction = model(image)
+    prediction = torch.sigmoid(model(image))
     if prediction.ndim != 4 or prediction.shape[:2] != (1, 1):
         raise ValueError(f"Expected model output [1, 1, H, W], got {tuple(prediction.shape)}")
     heatmap = prediction[0, 0].float().cpu().numpy()

@@ -2,12 +2,12 @@
   "batch_size": 8,
   "learning_rate": 5e-4,
   "squeeze_and_excite": true,
-  "epochs": 776,
-  "input_dimensions": [512, 512],
+  "epochs": 251,
+  "input_dimensions": [880, 880],
   "input_dim": 32,
   "space_to_depth_stride": 1,
   "num_blocks": 3,
-  "num_conv_per_block": 1,
+  "num_conv_per_block": 2,
   "conv_kernel_size": 3,
   "activation_function": "leaky_relu"
 }

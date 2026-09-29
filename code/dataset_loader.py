@@ -11,7 +11,11 @@ from torchvision.transforms import functional as TF
 
 
 class SolarFilamentDatasetLoader(Dataset):
-    def __init__(self, training_set_payload: Path, config_payload: Path, *, augment=True):
+    def __init__(self, training_set_payload: Path, config_payload: Path, *, augment=True,
+                 annotation_sampling="random"):
+        if annotation_sampling not in ("random", "all"):
+            raise ValueError("annotation_sampling must be random or all")
+        self.annotation_sampling = annotation_sampling
         self.augment = augment
         self.geometric_augmentation = RandomAffine(degrees=15, translate=(0.02, 0.02))
         self.contrast_augmentation = ColorJitter(contrast=0.2)
@@ -47,23 +51,30 @@ class SolarFilamentDatasetLoader(Dataset):
             )
 
         images_payload = payload["images"]
-        self.num_images = len(images_payload)
-
-        print(f"Loading: {self.num_images} images")
-
         self.images_name = []
-        self.image_ids = []
+        self.annotation_ids = []
+        self.image_ids = [] if annotation_sampling == "all" else None
         self.polygons_by_image = {image["id"]: [] for image in images_payload}
         for annotation in payload["annotations"]:
             self.polygons_by_image[annotation["image_id"]].extend(
                 annotation["segmentation"]
             )
 
-        for image_info in images_payload:
-            image_filename = image_info["file_name"]
-            full_image_name = f"{parent_folder}/train_images/{image_filename}"
-            self.images_name.append(full_image_name)
-            self.image_ids.append(image_info["id"])
+        records_by_file = {}
+        for record in images_payload:
+            records_by_file.setdefault(record["file_name"], []).append(record["id"])
+        self.num_images = len(records_by_file)
+        if annotation_sampling == "random":
+            for filename, ids in records_by_file.items():
+                self.images_name.append(str(parent_folder / "train_images" / filename))
+                self.annotation_ids.append(ids)
+        else:
+            for record in images_payload:
+                self.images_name.append(str(parent_folder / "train_images" / record["file_name"]))
+                self.annotation_ids.append([record["id"]])
+                self.image_ids.append(record["id"])
+        print(f"Loading: {self.num_images} physical images, {len(images_payload)} annotation sets "
+              f"| {len(self)} samples | annotation sampling: {annotation_sampling}")
 
     def __len__(self):
         return len(self.images_name)
@@ -128,7 +139,9 @@ class SolarFilamentDatasetLoader(Dataset):
         )
         image = torch.from_numpy(opencv_image).unsqueeze(0)  # [1, H, W]
 
-        polygons = self.polygons_by_image[self.image_ids[idx]]
+        ids = self.annotation_ids[idx]
+        image_id = ids[torch.randint(len(ids), ()).item()] if len(ids) > 1 else ids[0]
+        polygons = self.polygons_by_image[image_id]
         if polygons:
             scale = np.array([self.mask_width / width, self.mask_height / height])
             scaled_polygons = [

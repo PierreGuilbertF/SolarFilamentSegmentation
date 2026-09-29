@@ -165,7 +165,7 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path,
     if validation_set_payload is not None:
         from segmentation_utils import annotation_to_rle, load_annotations
 
-        validation_dataset = SolarFilamentDatasetLoader(validation_set_payload, config, augment=False)
+        validation_dataset = SolarFilamentDatasetLoader(validation_set_payload, config, augment=False, annotation_sampling="all",)
         validation_dataloader = create_training_dataloader(
             validation_dataset, batch_size, device, config_payload, shuffle=False)
         _, annotations = load_annotations(validation_set_payload)
@@ -248,10 +248,13 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path,
         mean_loss = total_loss / num_samples
         validation = None
         validation_elapsed = 0.0
-        if validation_dataloader is not None:
+        if epoch % 50 == 0:
+            ExportBatch(images, masks, predicted_masks)
+        if validation_dataloader is not None and epoch % 10 == 0:
             validation_start = perf_counter()
             validation = validate_model(raw_model, validation_dataloader, device, gt_by_id, validation_threshold)
             validation_elapsed = perf_counter() - validation_start
+
         print(
             f"Epoch {epoch + 1}/{num_epochs} | Mean training loss: {mean_loss:.6f} | "
             f"Time: {epoch_elapsed:.3f}s"
@@ -270,8 +273,6 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path,
                 "validation_elapsed_seconds": validation_elapsed,
             }
         )
-
-        #ExportBatch(images, masks, predicted_masks)
 
         checkpoint = {
             "model_state_dict": raw_model.state_dict(), "config": config_payload,

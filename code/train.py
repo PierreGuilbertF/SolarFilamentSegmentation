@@ -21,7 +21,7 @@ def initialize_data_worker(worker_id):
     cv2.setNumThreads(1)
 
 
-def create_training_dataloader(dataset, batch_size, device, config):
+def create_training_dataloader(dataset, batch_size, device, config, *, shuffle=True):
     cpu_count = os.cpu_count() or 1
     worker_limit = {"cpu": min(2, cpu_count // 4), "mps": 2, "cuda": 4}[device.type]
     default_workers = min(worker_limit, max(0, cpu_count - 1))
@@ -45,7 +45,7 @@ def create_training_dataloader(dataset, batch_size, device, config):
     return DataLoader(
         dataset,
         batch_size=batch_size,
-        shuffle=True,
+        shuffle=shuffle,
         num_workers=num_workers,
         pin_memory=device.type == "cuda",
         **worker_options,
@@ -96,13 +96,56 @@ def ExportBatch(
         cv2.imwrite(filename, predicted_mask)
 
 
-def train_model(config: Path, training_set_payload: Path, output_dir: Path):
+@torch.no_grad()
+def validate_model(model, dataloader, device, gt_by_id, threshold=0.5):
+    from evaluate import pq_from_counts, score_entry
+    from postprocess import heatmap_to_instances
+
+    was_training = model.training
+    model.eval()
+    total_loss, num_samples, offset = 0.0, 0, 0
+    totals = dict(tp=0, fp=0, fn=0, matched_iou_sum=0.0)
+    try:
+        for images, masks in dataloader:
+            images = images.to(device, non_blocking=device.type == "cuda")
+            masks = masks.to(device, non_blocking=device.type == "cuda")
+            predictions = model(images).float()
+            loss = normalized_mse_loss(predictions, masks.float())
+            if not torch.isfinite(loss):
+                raise ValueError("Non-finite validation loss")
+            total_loss += loss.item() * images.shape[0]
+            num_samples += images.shape[0]
+            for heatmap in predictions[:, 0].cpu().numpy():
+                image_id = dataloader.dataset.image_ids[offset]
+                counts = score_entry(gt_by_id[image_id], list(heatmap_to_instances(heatmap, threshold)))
+                for key in totals:
+                    totals[key] += counts[key]
+                offset += 1
+    finally:
+        model.train(was_training)
+    return {"loss": total_loss / num_samples, "pq": pq_from_counts(totals), "totals": totals}
+
+
+def train_model(config: Path, training_set_payload: Path, output_dir: Path,
+                validation_set_payload: Path | None = None):
     """Train a model using the configuration, training set, and output directory."""
 
     with config.open(encoding="utf-8") as file:
         config_payload = json.load(file)
     batch_size = config_payload["batch_size"]
     num_epochs = config_payload["epochs"]
+    validation_threshold = config_payload.get("validation_threshold", 0.5)
+    if not np.isfinite(validation_threshold):
+        raise ValueError("validation_threshold must be finite")
+    if validation_set_payload is not None:
+        train_payload = json.loads(training_set_payload.read_text(encoding="utf-8"))
+        validation_payload = json.loads(validation_set_payload.read_text(encoding="utf-8"))
+        train_names = {i["file_name"] for i in train_payload["images"]}
+        validation_names = {i["file_name"] for i in validation_payload["images"]}
+        if not train_names or not validation_names:
+            raise ValueError("Training and validation splits must be nonempty")
+        if train_names & validation_names:
+            raise ValueError("Training and validation share physical images; use train_split.json")
 
     if torch.cuda.is_available():
         device = torch.device("cuda")
@@ -117,6 +160,17 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path):
     train_dataloader = create_training_dataloader(
         dataset_loader, batch_size, device, config_payload
     )
+    validation_dataloader = None
+    gt_by_id = {}
+    if validation_set_payload is not None:
+        from segmentation_utils import annotation_to_rle, load_annotations
+
+        validation_dataset = SolarFilamentDatasetLoader(validation_set_payload, config, augment=False)
+        validation_dataloader = create_training_dataloader(
+            validation_dataset, batch_size, device, config_payload, shuffle=False)
+        _, annotations = load_annotations(validation_set_payload)
+        gt_by_id = {image_id: [annotation_to_rle(a) for a in annotations[image_id]]
+                    for image_id in validation_dataset.image_ids}
     print(
         f"Data loading: {train_dataloader.num_workers} workers | "
         f"Prefetch: {train_dataloader.prefetch_factor} | "
@@ -126,7 +180,9 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path):
 
     # Initialize the model
     model = Unet(config).to(device)
-    model = torch.compile(model, mode="default")
+    if config_payload.get("compile", True):
+        model = torch.compile(model, mode="default")
+    raw_model = getattr(model, "_orig_mod", model)
 
     # Initialize the optimizer
     adam_optimizer = torch.optim.Adam(
@@ -142,6 +198,8 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path):
 
     output_dir.mkdir(parents=True, exist_ok=True)
     training_report = []
+    best_validation_loss = float("inf")
+    best_validation_pq = -float("inf")
 
     model.train()
     # model = torch.compile(model)
@@ -157,7 +215,8 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path):
             images = images.to(device, non_blocking=device.type == "cuda")
             masks = masks.to(device, non_blocking=device.type == "cuda")
             adam_optimizer.zero_grad(set_to_none=True)
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            with torch.autocast(device_type=device.type, dtype=torch.bfloat16,
+                                enabled=device.type == "cuda" and torch.cuda.is_bf16_supported()):
                 predicted_masks = model(images)
             loss = normalized_mse_loss(predicted_masks.float(), masks.float())
             loss.backward()
@@ -187,9 +246,17 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path):
 
         epoch_elapsed = perf_counter() - epoch_start
         mean_loss = total_loss / num_samples
+        validation = None
+        validation_elapsed = 0.0
+        if validation_dataloader is not None:
+            validation_start = perf_counter()
+            validation = validate_model(raw_model, validation_dataloader, device, gt_by_id, validation_threshold)
+            validation_elapsed = perf_counter() - validation_start
         print(
             f"Epoch {epoch + 1}/{num_epochs} | Mean training loss: {mean_loss:.6f} | "
-            f"Time: {epoch_elapsed:.3f}s",
+            f"Time: {epoch_elapsed:.3f}s"
+            + (f" | Val loss: {validation['loss']:.8g} | Val PQ: {validation['pq']:.6f}"
+               f" | Val time: {validation_elapsed:.3f}s" if validation else ""),
             flush=True,
         )
 
@@ -199,18 +266,34 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path):
                 "mean_training_loss": mean_loss,
                 "elapsed_seconds": epoch_elapsed,
                 "batch_elapsed_seconds": batch_times,
+                "validation": validation,
+                "validation_elapsed_seconds": validation_elapsed,
             }
         )
 
         #ExportBatch(images, masks, predicted_masks)
 
-        torch.save(
-            {
-                "model_state_dict": model._orig_mod.state_dict(),
-                "config": config_payload,
-            },
-            output_dir / "model.pt",
-        )
+        checkpoint = {
+            "model_state_dict": raw_model.state_dict(), "config": config_payload,
+            "epoch": epoch + 1, "validation": validation,
+            "training_annotations": str(training_set_payload.resolve()),
+            "validation_annotations": str(validation_set_payload.resolve()) if validation_set_payload else None,
+            "validation_threshold": validation_threshold,
+        }
+
+        def save_checkpoint(name):
+            temporary = output_dir / f"{name}.tmp"
+            torch.save(checkpoint, temporary)
+            temporary.replace(output_dir / name)
+
+        save_checkpoint("model.pt")
+        if validation is not None:
+            if validation["loss"] < best_validation_loss:
+                best_validation_loss = validation["loss"]
+                save_checkpoint("best_loss.pt")
+            if validation["pq"] > best_validation_pq:
+                best_validation_pq = validation["pq"]
+                save_checkpoint("best_pq.pt")
 
         with (output_dir / "training_report.json").open("w", encoding="utf-8") as file:
             json.dump(training_report, file, indent=2)

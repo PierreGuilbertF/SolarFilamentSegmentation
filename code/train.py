@@ -10,12 +10,36 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
+EVAL_EVERY = 75
 
 def normalized_mse_loss(predicted_masks, masks, foreground_weight=3.0):
     weights = 1.0 + (foreground_weight - 1.0) * masks
     errors = (predicted_masks - masks).square()
     return (weights * errors).mean()
 
+def segmentation_loss(logits, masks, pos_weight=None):
+    bce = torch.nn.functional.binary_cross_entropy_with_logits(
+        logits,
+        masks,
+        pos_weight=pos_weight,
+    )
+
+    probabilities = torch.sigmoid(logits)
+
+    dims = (1, 2, 3)
+
+    intersection = (probabilities * masks).sum(dim=dims)
+    denominator = (
+        probabilities.sum(dim=dims)
+        + masks.sum(dim=dims)
+    )
+
+    dice_loss = 1.0 - (
+        (2.0 * intersection + 1.0)
+        / (denominator + 1.0)
+    ).mean()
+
+    return bce + dice_loss
 
 def initialize_data_worker(worker_id):
     cv2.setNumThreads(1)
@@ -23,7 +47,7 @@ def initialize_data_worker(worker_id):
 
 def create_training_dataloader(dataset, batch_size, device, config, *, shuffle=True):
     cpu_count = os.cpu_count() or 1
-    worker_limit = {"cpu": min(2, cpu_count // 4), "mps": 2, "cuda": 4}[device.type]
+    worker_limit = {"cpu": min(2, cpu_count // 4), "mps": 2, "cuda": 8}[device.type]
     default_workers = min(worker_limit, max(0, cpu_count - 1))
     num_workers = config.get("num_workers", default_workers)
     if type(num_workers) is not int or num_workers < 0:
@@ -31,7 +55,7 @@ def create_training_dataloader(dataset, batch_size, device, config, *, shuffle=T
 
     worker_options = {}
     if num_workers > 0:
-        prefetch_factor = config.get("prefetch_factor", 4)
+        prefetch_factor = config.get("prefetch_factor", 2)
         if type(prefetch_factor) is not int or prefetch_factor < 1:
             raise ValueError("prefetch_factor must be a positive integer")
         worker_options = {
@@ -110,11 +134,12 @@ def validate_model(model, dataloader, device, gt_by_id, threshold=0.5):
             images = images.to(device, non_blocking=device.type == "cuda")
             masks = masks.to(device, non_blocking=device.type == "cuda")
             predictions = model(images).float()
-            loss = normalized_mse_loss(predictions, masks.float())
+            loss = segmentation_loss(predictions, masks.float())
             if not torch.isfinite(loss):
                 raise ValueError("Non-finite validation loss")
             total_loss += loss.item() * images.shape[0]
             num_samples += images.shape[0]
+            predictions = torch.sigmoid(predictions)
             for heatmap in predictions[:, 0].cpu().numpy():
                 image_id = dataloader.dataset.image_ids[offset]
                 counts = score_entry(gt_by_id[image_id], list(heatmap_to_instances(heatmap, threshold)))
@@ -205,7 +230,7 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path,
     # model = torch.compile(model)
     for epoch in range(num_epochs):
         epoch_start = perf_counter()
-        total_loss = 0.0
+        total_loss = torch.zeros((), device=device)
         num_samples = 0
         batch_times = []
 
@@ -218,39 +243,29 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path,
             with torch.autocast(device_type=device.type, dtype=torch.bfloat16,
                                 enabled=device.type == "cuda" and torch.cuda.is_bf16_supported()):
                 predicted_masks = model(images)
-            loss = normalized_mse_loss(predicted_masks.float(), masks.float())
+            loss = segmentation_loss(predicted_masks.float(), masks.float())
             loss.backward()
             learning_rate = adam_optimizer.param_groups[0]["lr"]
             adam_optimizer.step()
             #scheduler.step()
 
-            batch_loss = loss.item()
-            total_loss += batch_loss * images.size(0)
+            total_loss += loss.detach() * images.size(0)
             num_samples += images.size(0)
-            if device.type == "cuda":
-                torch.cuda.synchronize(device)
-            elif device.type == "mps":
-                torch.mps.synchronize()
-            batch_elapsed = perf_counter() - batch_start
-            batch_times.append(batch_elapsed)
 
-            #if iteration_idx % 25 == 0:
-            #    print(
-            #        f"Epoch {epoch + 1}/{num_epochs} | "
-            #        f"Batch {iteration_idx + 1}/{len(train_dataloader)} | "
-            #        f"Loss: {batch_loss:.6f} | LR: {learning_rate:.3e} | "
-            #        f"Time: {batch_elapsed:.3f}s",
-            #        flush=True,
-            #    )
-            batch_start = perf_counter()
 
+
+
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+        elif device.type == "mps":
+            torch.mps.synchronize()
         epoch_elapsed = perf_counter() - epoch_start
-        mean_loss = total_loss / num_samples
+        mean_loss = (total_loss / num_samples).item()
         validation = None
         validation_elapsed = 0.0
-        if epoch % 50 == 0:
+        if epoch % EVAL_EVERY == 0:
             ExportBatch(images, masks, predicted_masks)
-        if validation_dataloader is not None and epoch % 10 == 0:
+        if validation_dataloader is not None and epoch % EVAL_EVERY == 0:
             validation_start = perf_counter()
             validation = validate_model(raw_model, validation_dataloader, device, gt_by_id, validation_threshold)
             validation_elapsed = perf_counter() - validation_start
@@ -268,7 +283,6 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path,
                 "epoch": epoch + 1,
                 "mean_training_loss": mean_loss,
                 "elapsed_seconds": epoch_elapsed,
-                "batch_elapsed_seconds": batch_times,
                 "validation": validation,
                 "validation_elapsed_seconds": validation_elapsed,
             }

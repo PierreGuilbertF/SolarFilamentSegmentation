@@ -93,7 +93,7 @@ class SqueezeAndExcite(nn.Module):
 
 
 class ResidualBlock(nn.Module):
-    def __init__(self, channels, kernel_size, drop_out=False, activation="relu"):
+    def __init__(self, channels, kernel_size, drop_out=True, activation="relu"):
         super().__init__()
         block = [
             nn.Conv2d(
@@ -107,8 +107,9 @@ class ResidualBlock(nn.Module):
                 channels,
                 kernel_size,
                 padding=1,
-                bias=True
+                bias=False
             ))
+        block.append(nn.BatchNorm2d(channels, momentum=0.1))
 
         # drop-out is optional
         if drop_out:
@@ -121,7 +122,7 @@ class ResidualBlock(nn.Module):
         return self.activation(x + self.residual(x))
 
 class ResidualDWBlock(nn.Module):
-    def __init__(self, channels, kernel_size, drop_out=True, activation="relu"):
+    def __init__(self, channels, kernel_size, drop_out=False, activation="relu"):
         super().__init__()
         block = [
             nn.Conv2d(
@@ -302,10 +303,10 @@ class Unet(nn.Module):
         self.auto_encoder = AutoEncoderWithSkips(self.input_dim, config)
 
         # Decoder head
-        self.decoder = torch.nn.Conv2d(self.input_dim, 1, 1, 1, bias=False)
+        self.decoder = torch.nn.Conv2d(self.input_dim, 1, 1, 1, bias=True)
         
         # Start near zero without blocking gradients through a zero-weight head.
-        nn.init.normal_(self.decoder.weight, mean=0.0, std=1e-4)
+        #nn.init.normal_(self.decoder.weight, mean=0.0, std=1e-4)
 
     def forward(self, x):
         return self.decoder(self.auto_encoder(self.space_to_depth(x)))

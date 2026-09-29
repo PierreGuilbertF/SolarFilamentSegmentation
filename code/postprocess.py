@@ -27,6 +27,11 @@ def select_device(name="auto"):
 
 def load_model(checkpoint_path, device):
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=True)
+    if isinstance(checkpoint, dict) and checkpoint.get("model_type") == "dinov3_convnext":
+        from transformer_model import DinoSegmentationModel
+
+        model = DinoSegmentationModel.from_checkpoint(checkpoint)
+        return model.to(device).eval(), checkpoint["config"]
     if not isinstance(checkpoint, dict) or not {"config", "model_state_dict"} <= checkpoint.keys():
         raise ValueError("The checkpoint must contain config and model_state_dict")
     config = checkpoint["config"]

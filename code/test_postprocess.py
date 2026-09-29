@@ -81,6 +81,7 @@ class PostprocessTests(unittest.TestCase):
                 "input_dimensions": [32, 48], "space_to_depth_stride": 2, "input_dim": 2,
                 "num_blocks": 0, "num_conv_per_block": 0,
                 "conv_kernel_size": 3, "activation_function": "relu",
+                "squeeze_and_excite": False,
             }
             config_path = root / "config.json"
             config_path.write_text(json.dumps(config))

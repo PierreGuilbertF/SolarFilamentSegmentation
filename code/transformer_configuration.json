@@ -1,0 +1,21 @@
+{
+  "model_type": "dinov3_convnext",
+  "encoder_name": "facebook/dinov3-convnext-tiny-pretrain-lvd1689m",
+  "encoder_revision": "main",
+  "freeze_encoder": true,
+  "input_dimensions": [256, 256],
+  "space_to_depth_stride": 1,
+  "decoder_channels": 64,
+  "feature_dtype": "float32",
+  "augment": false,
+  "batch_size": 8,
+  "learning_rate": 0.0001,
+  "epochs": 100,
+  "foreground_weight": 3.0,
+  "scheduler": "none",
+  "min_learning_rate": 0.0,
+  "mixed_precision": false,
+  "compile": false,
+  "prefetch_factor": 2,
+  "seed": 42
+}

@@ -39,6 +39,14 @@ def pq_from_counts(counts):
     return counts["matched_iou_sum"] / denominator if denominator else 0.0
 
 
+def metrics_from_counts(counts):
+    tp = counts["tp"]
+    denominator = tp + 0.5 * counts["fp"] + 0.5 * counts["fn"]
+    return {"pq": pq_from_counts(counts),
+            "sq": counts["matched_iou_sum"] / tp if tp else 0.0,
+            "rq": tp / denominator if denominator else 0.0}
+
+
 def load_predictions(path, allowed_stems):
     predictions = defaultdict(list)
     ids = set()
@@ -111,7 +119,7 @@ def run(submission_path, annotations_path, output_dir):
                 for key in totals:
                     totals[key] += counts[key]
                 per_image.append({"image_id": record["id"], "file_name": filename,
-                                  **counts, "pq": pq_from_counts(counts)})
+                                  **counts, **metrics_from_counts(counts)})
                 overlaps = ious > 0
                 gt_degrees.update(overlaps.sum(axis=1).tolist())
                 pred_degrees.update(overlaps.sum(axis=0).tolist())
@@ -130,7 +138,7 @@ def run(submission_path, annotations_path, output_dir):
         "matching_iou_threshold": 0.5,
         "num_images": len(records_by_file),
         "num_annotation_images": len(per_image),
-        "pq": pq_from_counts(totals),
+        **metrics_from_counts(totals),
         "totals": totals,
         "nonzero_pair_iou": distribution(nonzero_ious),
         "nonzero_pair_dice": distribution(nonzero_dices),
@@ -139,7 +147,8 @@ def run(submission_path, annotations_path, output_dir):
         "per_annotation_image": per_image,
     }
     (output_dir / "scores.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
-    print(f"PQ: {report['pq']:.6f} | TP: {totals['tp']} | FP: {totals['fp']} | FN: {totals['fn']}")
+    print(f"PQ: {report['pq']:.6f} | SQ: {report['sq']:.6f} | RQ: {report['rq']:.6f} | "
+          f"TP: {totals['tp']} | FP: {totals['fp']} | FN: {totals['fn']}")
     print(f"Scores: {output_dir / 'scores.json'}")
     return report
 

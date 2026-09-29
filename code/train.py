@@ -122,7 +122,7 @@ def ExportBatch(
 
 @torch.no_grad()
 def validate_model(model, dataloader, device, gt_by_id, threshold=0.5):
-    from evaluate import pq_from_counts, score_entry
+    from evaluate import metrics_from_counts, score_entry
     from postprocess import heatmap_to_instances
 
     was_training = model.training
@@ -148,7 +148,7 @@ def validate_model(model, dataloader, device, gt_by_id, threshold=0.5):
                 offset += 1
     finally:
         model.train(was_training)
-    return {"loss": total_loss / num_samples, "pq": pq_from_counts(totals), "totals": totals}
+    return {"loss": total_loss / num_samples, **metrics_from_counts(totals), "totals": totals}
 
 
 def train_model(config: Path, training_set_payload: Path, output_dir: Path,
@@ -274,6 +274,7 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path,
             f"Epoch {epoch + 1}/{num_epochs} | Mean training loss: {mean_loss:.6f} | "
             f"Time: {epoch_elapsed:.3f}s"
             + (f" | Val loss: {validation['loss']:.8g} | Val PQ: {validation['pq']:.6f}"
+               f" | Val SQ: {validation['sq']:.6f} | Val RQ: {validation['rq']:.6f}"
                f" | Val time: {validation_elapsed:.3f}s" if validation else ""),
             flush=True,
         )
@@ -301,7 +302,8 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path,
             torch.save(checkpoint, temporary)
             temporary.replace(output_dir / name)
 
-        save_checkpoint("model.pt")
+        if epoch % EVAL_EVERY == 0 or epoch + 1 == num_epochs:
+            save_checkpoint("model.pt")
         if validation is not None:
             if validation["loss"] < best_validation_loss:
                 best_validation_loss = validation["loss"]

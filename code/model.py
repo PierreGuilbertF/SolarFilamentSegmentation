@@ -112,7 +112,7 @@ class ResidualBlock(nn.Module):
 
         # drop-out is optional
         if drop_out:
-            block.append(nn.Dropout2d(p=0.1))
+            block.append(nn.Dropout2d(p=0.075))
 
         self.residual = nn.Sequential(*block)
         self.activation = get_activation_function(activation, channels)
@@ -157,6 +157,7 @@ class AutoEncoderWithSkips(nn.Module):
         self.num_conv_per_block = config_payload["num_conv_per_block"]
         self.conv_kernel_size = config_payload["conv_kernel_size"]
         self.squeeze_and_excite = config_payload["squeeze_and_excite"]
+        self.max_cap_channels = 256
 
         down_blocks = []
         downscales = []
@@ -167,8 +168,8 @@ class AutoEncoderWithSkips(nn.Module):
         fusions_2 = []
 
         for k in range(self.num_blocks):
-            current_channels = 2**k * channels
-            next_channels = 2 ** (k + 1) * channels
+            current_channels = min(2**k * channels, self.max_cap_channels)
+            next_channels = min(2 ** (k + 1) * channels, self.max_cap_channels)
 
             # Convolution block for a given resolution during downsampling path
             layers_down = [
@@ -246,7 +247,7 @@ class AutoEncoderWithSkips(nn.Module):
         self.middle_processing = nn.Sequential(
             *[
                 ResidualBlock(
-                    2**self.num_blocks * channels,
+                    min(2**self.num_blocks * channels, self.max_cap_channels),
                     self.conv_kernel_size,
                     activation=self.activation,
                 )
@@ -302,6 +303,7 @@ class Unet(nn.Module):
 
         # Decoder head
         self.decoder = torch.nn.Conv2d(self.input_dim, 1, 1, 1, bias=False)
+        
         # Start near zero without blocking gradients through a zero-weight head.
         nn.init.normal_(self.decoder.weight, mean=0.0, std=1e-4)
 

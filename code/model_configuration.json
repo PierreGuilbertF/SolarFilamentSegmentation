@@ -1,8 +1,8 @@
 {
-  "batch_size": 32,
-  "learning_rate": 5e-5,
+  "batch_size": 16,
+  "learning_rate": 5e-4,
   "squeeze_and_excite": true,
-  "epochs": 50,
+  "epochs": 500,
   "input_dimensions": [256, 256],
   "input_dim": 32,
   "space_to_depth_stride": 1,

@@ -113,7 +113,7 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path):
     print(f"Training device: {device}", flush=True)
 
     # Initialize the datasetloader
-    dataset_loader = SolarFilamentDatasetLoader(training_set_payload, config, augment=False)
+    dataset_loader = SolarFilamentDatasetLoader(training_set_payload, config, augment=True)
     train_dataloader = create_training_dataloader(
         dataset_loader, batch_size, device, config_payload
     )
@@ -134,11 +134,11 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path):
     )
 
     # Learning rate scheduler
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        adam_optimizer,
-        T_max=num_epochs * len(train_dataloader),
-        eta_min=config_payload.get("min_learning_rate", 0.0),
-    )
+    #scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    #    adam_optimizer,
+    #    T_max=num_epochs * len(train_dataloader),
+    #    eta_min=config_payload.get("min_learning_rate", 0.0),
+    #)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     training_report = []
@@ -163,7 +163,7 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path):
             loss.backward()
             learning_rate = adam_optimizer.param_groups[0]["lr"]
             adam_optimizer.step()
-            scheduler.step()
+            #scheduler.step()
 
             batch_loss = loss.item()
             total_loss += batch_loss * images.size(0)

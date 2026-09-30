@@ -89,22 +89,34 @@ def build_mlp(n_features):
 
 
 def load_classifier(path):
-    model = json.loads(path.read_text(encoding="utf-8"))
-    if model.get("version") not in (2, 3) or model.get("feature_names") != FEATURE_NAMES:
+    return prepare_classifier(json.loads(path.read_text(encoding="utf-8")))
+
+
+def prepare_classifier(model):
+    model = dict(model)
+    names = FEATURE_NAMES
+    if model.get("model_type") == "pair_mlp":
+        from filament_merge import PAIR_FEATURE_NAMES
+        names = PAIR_FEATURE_NAMES
+    if model.get("version") not in (2, 3) or model.get("feature_names") != names:
         raise ValueError("Unsupported classifier or feature schema; retrain with geometry-only features")
     kind = model.get("model_type", "logistic")
-    if kind not in ("logistic", "mlp"):
+    if kind not in ("logistic", "mlp", "pair_mlp"):
         raise ValueError("Unsupported classifier type")
     for key in ("mean", "scale") + (("coefficients",) if kind == "logistic" else ()):
         model[key] = np.asarray(model[key], dtype=np.float64)
-        if model[key].shape != (len(FEATURE_NAMES),) or not np.isfinite(model[key]).all():
+        if model[key].shape != (len(names),) or not np.isfinite(model[key]).all():
             raise ValueError(f"Invalid classifier {key}")
     if np.any(model["scale"] <= 0):
         raise ValueError("Invalid classifier scale")
-    if kind == "mlp":
+    if kind in ("mlp", "pair_mlp"):
         import torch
 
-        network = build_mlp(len(FEATURE_NAMES))
+        if kind == "pair_mlp":
+            from filament_merge import PairMergeMLP
+            network = PairMergeMLP(len(names))
+        else:
+            network = build_mlp(len(names))
         state = {key: torch.tensor(value, dtype=torch.float32) for key, value in model["state_dict"].items()}
         if not all(torch.isfinite(value).all() for value in state.values()):
             raise ValueError("Non-finite MLP weights")
@@ -112,17 +124,19 @@ def load_classifier(path):
         model["network"] = network.eval()
     elif not np.isfinite(model["intercept"]):
         raise ValueError("Invalid classifier intercept")
+    if model.get("merge_model") is not None:
+        model["merge_model"] = prepare_classifier(model["merge_model"])
     return model
 
 
 def predict_probabilities(model, features):
     standardized = (np.asarray(features) - model["mean"]) / model["scale"]
-    if model.get("model_type", "logistic") == "mlp":
+    if model.get("model_type", "logistic") in ("mlp", "pair_mlp"):
         import torch
 
         model["network"].eval()
         with torch.inference_mode():
             logits = model["network"](torch.as_tensor(standardized, dtype=torch.float32))
-            return torch.sigmoid(logits).squeeze(-1).numpy()
+            return torch.sigmoid(logits).numpy().reshape(standardized.shape[:-1])
     logits = standardized @ model["coefficients"] + model["intercept"]
     return np.exp(-np.logaddexp(0, -logits))

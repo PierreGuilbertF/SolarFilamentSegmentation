@@ -5,10 +5,10 @@ from pathlib import Path
 
 import numpy as np
 
-from filament_classifier import extract_features, load_classifier, load_heatmap, predict_probabilities, read_candidates
+from filament_classifier import extract_features, load_classifier, predict_probabilities, read_candidates
 
 
-def run(model_path, candidates_path, heatmaps_dir, output_dir, threshold=0.5):
+def run(model_path, candidates_path, output_dir, threshold=0.5):
     if not np.isfinite(threshold) or not 0 <= threshold <= 1:
         raise ValueError("threshold must be in [0, 1]")
     if (output_dir / "submission.csv").resolve() == candidates_path.resolve():
@@ -23,10 +23,9 @@ def run(model_path, candidates_path, heatmaps_dir, output_dir, threshold=0.5):
         writer, score_writer = csv.writer(output), csv.writer(scores)
         writer.writerow(["filament_id", "segmentation_rle"])
         score_writer.writerow(["filament_id", "probability", "kept"])
-        for stem, entries in candidates.items():
-            heatmap = load_heatmap(heatmaps_dir, stem)
+        for image_index, (stem, entries) in enumerate(candidates.items(), 1):
             for identifier, rle in entries:
-                probability = float(predict_probabilities(model, extract_features(rle, heatmap)))
+                probability = float(predict_probabilities(model, extract_features(rle)))
                 keep = probability >= threshold
                 total += 1
                 kept += int(keep)
@@ -34,6 +33,7 @@ def run(model_path, candidates_path, heatmaps_dir, output_dir, threshold=0.5):
                 if keep:
                     kept_stems.add(stem)
                     writer.writerow([identifier, rle["counts"].decode("ascii")])
+            print(f"[{image_index}/{len(candidates)}] {stem}: {len(entries)} candidates", flush=True)
     manifest = candidates_path.parent / "inference_report.json"
     if manifest.exists():
         report = json.loads(manifest.read_text(encoding="utf-8"))
@@ -54,12 +54,11 @@ def main():
     parser = argparse.ArgumentParser(description="Filter candidate filaments with a trained logistic classifier.")
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--candidates", type=Path, required=True)
-    parser.add_argument("--heatmaps-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--threshold", type=float, default=0.5)
     args = parser.parse_args()
     try:
-        run(args.model, args.candidates, args.heatmaps_dir, args.output_dir, args.threshold)
+        run(args.model, args.candidates, args.output_dir, args.threshold)
     except (ValueError, OSError, KeyError) as error:
         parser.error(str(error))
 

@@ -59,8 +59,24 @@ def heatmap_to_instances(heatmap, threshold):
         raise ValueError("Expected a finite two-dimensional heatmap")
     height, width = IMAGE_SIZE
     heatmap = cv2.resize(heatmap, (width, height), interpolation=cv2.INTER_LINEAR)
-    binary_mask = (heatmap >= threshold).astype(np.uint8)
+
+    if False:
+        binary_mask = (heatmap >= threshold).astype(np.uint8)
+    else:
+        high = 0.75
+        low = 0.45
+        # Seeds: pixels > high. Grow into connected pixels with prob > low.
+        low_mask = (heatmap > low).astype(np.uint8)
+        seed_mask = heatmap > high
+        count, labels = cv2.connectedComponents(low_mask, connectivity=8)
+        binary_mask = np.zeros_like(low_mask)
+        for label in range(1, count):
+            component = labels == label
+            if np.any(seed_mask[component]):
+                binary_mask[component] = 1
+
     count, labels = cv2.connectedComponents(binary_mask, connectivity=8)
+
     # Stream masks rather than stacking a full-resolution mask for every instance.
     for label in range(1, count):
         yield encode_mask(labels == label)

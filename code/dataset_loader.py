@@ -48,10 +48,10 @@ class SolarFilamentDatasetLoader(Dataset):
             raise ValueError("annotation_sampling must be random or all")
         self.annotation_sampling = annotation_sampling
         self.augment = augment
-        self.geometric_augmentation = RandomAffine(degrees=3, translate=(0.02, 0.02), )
+        self.geometric_augmentation = RandomAffine(degrees=4, translate=(0.04, 0.04), )
         self.photometric_augmentation = ColorJitter(
-            brightness=0.15,
-            contrast=0.20,
+            brightness=0.20,
+            contrast=0.30,
         )
         with config_payload.open(encoding="utf-8") as file:
             config = json.load(file)
@@ -189,9 +189,9 @@ class SolarFilamentDatasetLoader(Dataset):
         image = TF.adjust_gamma(image, gamma=gamma)
         # Low frequency photogrammetric perturbations
         # Model clouds etc
-        image = low_freq_field(image, scale=32, amplitude_max=0.05)
+        image = low_freq_field(image, scale=32, amplitude_max=0.075)
         # Gaussian blur, modeling atmospher seeing blur
-        sigma = torch.empty(()).uniform_(0.1, 1.2).item()
+        sigma = torch.empty(()).uniform_(0.1, 1.4).item()
         image = TF.gaussian_blur(image, kernel_size=7, sigma=sigma)
         # Sensor noise modeled with Poisson Distribution
         peak = 10 ** torch.empty(()).uniform_(4.3, 5.2).item()

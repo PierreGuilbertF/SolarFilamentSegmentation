@@ -192,7 +192,12 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path,
 
         validation_dataset = SolarFilamentDatasetLoader(validation_set_payload, config, augment=False, annotation_sampling="all",)
         validation_dataloader = create_training_dataloader(
-            validation_dataset, batch_size, device, config_payload, shuffle=False)
+            validation_dataset,
+            batch_size,
+            device,
+            {**config_payload, "num_workers": 2, "prefetch_factor": 1},
+            shuffle=False,
+        )
         _, annotations = load_annotations(validation_set_payload)
         gt_by_id = {image_id: [annotation_to_rle(a) for a in annotations[image_id]]
                     for image_id in validation_dataset.image_ids}
@@ -215,11 +220,11 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path,
     )
 
     # Learning rate scheduler
-    #scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    #    adam_optimizer,
-    #    T_max=num_epochs * len(train_dataloader),
-    #    eta_min=config_payload.get("min_learning_rate", 0.0),
-    #)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        adam_optimizer,
+        T_max=num_epochs * len(train_dataloader),
+        eta_min=config_payload.get("min_learning_rate", 0.0),
+    )
 
     output_dir.mkdir(parents=True, exist_ok=True)
     training_report = []
@@ -247,7 +252,7 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path,
             loss.backward()
             learning_rate = adam_optimizer.param_groups[0]["lr"]
             adam_optimizer.step()
-            #scheduler.step()
+            scheduler.step()
 
             total_loss += loss.detach() * images.size(0)
             num_samples += images.size(0)
@@ -272,6 +277,7 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path,
 
         print(
             f"Epoch {epoch + 1}/{num_epochs} | Mean training loss: {mean_loss:.6f} | "
+            f"LR: {adam_optimizer.param_groups[0]['lr']:.3e} | "
             f"Time: {epoch_elapsed:.3f}s"
             + (f" | Val loss: {validation['loss']:.8g} | Val PQ: {validation['pq']:.6f}"
                f" | Val SQ: {validation['sq']:.6f} | Val RQ: {validation['rq']:.6f}"

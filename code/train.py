@@ -281,6 +281,8 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path,
             f"Time: {epoch_elapsed:.3f}s"
             + (f" | Val loss: {validation['loss']:.8g} | Val PQ: {validation['pq']:.6f}"
                f" | Val SQ: {validation['sq']:.6f} | Val RQ: {validation['rq']:.6f}"
+               f" | Val TP: {validation['totals']['tp']} | Val FP: {validation['totals']['fp']}"
+               f" | Val FN: {validation['totals']['fn']}"
                f" | Val time: {validation_elapsed:.3f}s" if validation else ""),
             flush=True,
         )

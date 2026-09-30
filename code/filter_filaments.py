@@ -24,8 +24,10 @@ def run(model_path, candidates_path, output_dir, threshold=0.5):
         writer.writerow(["filament_id", "segmentation_rle"])
         score_writer.writerow(["filament_id", "probability", "kept"])
         for image_index, (stem, entries) in enumerate(candidates.items(), 1):
-            for identifier, rle in entries:
-                probability = float(predict_probabilities(model, extract_features(rle)))
+            features = np.stack([extract_features(rle) for _, rle in entries])
+            probabilities = predict_probabilities(model, features)
+            for (identifier, rle), probability in zip(entries, probabilities):
+                probability = float(probability)
                 keep = probability >= threshold
                 total += 1
                 kept += int(keep)
@@ -51,7 +53,7 @@ def run(model_path, candidates_path, output_dir, threshold=0.5):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Filter candidate filaments with a trained logistic classifier.")
+    parser = argparse.ArgumentParser(description="Filter candidate filaments with a trained MLP or logistic classifier.")
     parser.add_argument("--model", type=Path, required=True)
     parser.add_argument("--candidates", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)

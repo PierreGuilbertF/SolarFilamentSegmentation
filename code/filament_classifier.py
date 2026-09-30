@@ -75,19 +75,54 @@ def extract_features(rle):
     ], dtype=np.float64)
 
 
+def build_mlp(n_features):
+    from torch import nn
+
+    return nn.Sequential(
+        nn.Linear(n_features, 32),
+        nn.ReLU(),
+        nn.Dropout(0.1),
+        nn.Linear(32, 16),
+        nn.ReLU(),
+        nn.Linear(16, 1),
+    )
+
+
 def load_classifier(path):
     model = json.loads(path.read_text(encoding="utf-8"))
-    if model.get("version") != 2 or model.get("feature_names") != FEATURE_NAMES:
+    if model.get("version") not in (2, 3) or model.get("feature_names") != FEATURE_NAMES:
         raise ValueError("Unsupported classifier or feature schema; retrain with geometry-only features")
-    for key in ("mean", "scale", "coefficients"):
+    kind = model.get("model_type", "logistic")
+    if kind not in ("logistic", "mlp"):
+        raise ValueError("Unsupported classifier type")
+    for key in ("mean", "scale") + (("coefficients",) if kind == "logistic" else ()):
         model[key] = np.asarray(model[key], dtype=np.float64)
         if model[key].shape != (len(FEATURE_NAMES),) or not np.isfinite(model[key]).all():
             raise ValueError(f"Invalid classifier {key}")
-    if np.any(model["scale"] <= 0) or not np.isfinite(model["intercept"]):
-        raise ValueError("Invalid classifier scale or intercept")
+    if np.any(model["scale"] <= 0):
+        raise ValueError("Invalid classifier scale")
+    if kind == "mlp":
+        import torch
+
+        network = build_mlp(len(FEATURE_NAMES))
+        state = {key: torch.tensor(value, dtype=torch.float32) for key, value in model["state_dict"].items()}
+        if not all(torch.isfinite(value).all() for value in state.values()):
+            raise ValueError("Non-finite MLP weights")
+        network.load_state_dict(state)
+        model["network"] = network.eval()
+    elif not np.isfinite(model["intercept"]):
+        raise ValueError("Invalid classifier intercept")
     return model
 
 
 def predict_probabilities(model, features):
-    logits = ((features - model["mean"]) / model["scale"]) @ model["coefficients"] + model["intercept"]
+    standardized = (np.asarray(features) - model["mean"]) / model["scale"]
+    if model.get("model_type", "logistic") == "mlp":
+        import torch
+
+        model["network"].eval()
+        with torch.inference_mode():
+            logits = model["network"](torch.as_tensor(standardized, dtype=torch.float32))
+            return torch.sigmoid(logits).squeeze(-1).numpy()
+    logits = standardized @ model["coefficients"] + model["intercept"]
     return np.exp(-np.logaddexp(0, -logits))

@@ -5,10 +5,10 @@ from pathlib import Path
 
 import numpy as np
 
-from filament_classifier import extract_features, load_classifier, predict_probabilities, read_candidates
+from filament_classifier import extract_features, image_index, load_feature_maps, load_classifier, predict_probabilities, read_candidates
 
 
-def run(model_path, candidates_path, output_dir, threshold=0.5, merge=True, merge_threshold=0.5):
+def run(model_path, candidates_path, output_dir, threshold=0.5, merge=True, merge_threshold=0.5, images_dir=None, heatmaps_dir=None):
     if not np.isfinite(threshold) or not 0 <= threshold <= 1:
         raise ValueError("threshold must be in [0, 1]")
     if not np.isfinite(merge_threshold) or not 0 <= merge_threshold <= 1:
@@ -19,6 +19,9 @@ def run(model_path, candidates_path, output_dir, threshold=0.5, merge=True, merg
     merge_model = model.get("merge_model") if merge else None
     if merge and merge_model is None:
         print("No merge model in checkpoint; applying filtering only.", flush=True)
+    images = image_index(images_dir)
+    if heatmaps_dir is None or not heatmaps_dir.is_dir():
+        raise ValueError("Provide --heatmaps-dir containing exported .npy heatmaps")
     candidates = read_candidates(candidates_path)
     output_dir.mkdir(parents=True, exist_ok=True)
     total, kept, output_instances = 0, 0, 0
@@ -33,8 +36,9 @@ def run(model_path, candidates_path, output_dir, threshold=0.5, merge=True, merg
         membership_writer.writerow(["output_filament_id", "source_filament_id"])
         writer.writerow(["filament_id", "segmentation_rle"])
         score_writer.writerow(["filament_id", "probability", "kept"])
-        for image_index, (stem, entries) in enumerate(candidates.items(), 1):
-            features = np.stack([extract_features(rle) for _, rle in entries])
+        for image_number, (stem, entries) in enumerate(candidates.items(), 1):
+            image, heatmap = load_feature_maps(stem, images, heatmaps_dir)
+            features = np.stack([extract_features(rle, image, heatmap) for _, rle in entries])
             probabilities = predict_probabilities(model, features)
             survivors, survivor_features = [], []
             for index, ((identifier, rle), probability) in enumerate(zip(entries, probabilities)):
@@ -57,7 +61,7 @@ def run(model_path, candidates_path, output_dir, threshold=0.5, merge=True, merg
             output_instances += len(survivors)
             for identifier, rle in survivors:
                 writer.writerow([identifier, rle["counts"].decode("ascii")])
-            print(f"[{image_index}/{len(candidates)}] {stem}: {len(entries)} candidates", flush=True)
+            print(f"[{image_number}/{len(candidates)}] {stem}: {len(entries)} candidates", flush=True)
     manifest = candidates_path.parent / "inference_report.json"
     if manifest.exists():
         report = json.loads(manifest.read_text(encoding="utf-8"))
@@ -84,9 +88,11 @@ def main():
     parser.add_argument("--threshold", type=float, default=0.5)
     parser.add_argument("--merge", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--merge-threshold", type=float, default=0.5)
+    parser.add_argument("--images-dir", type=Path, required=True)
+    parser.add_argument("--heatmaps-dir", type=Path, required=True)
     args = parser.parse_args()
     try:
-        run(args.model, args.candidates, args.output_dir, args.threshold, args.merge, args.merge_threshold)
+        run(args.model, args.candidates, args.output_dir, args.threshold, args.merge, args.merge_threshold, args.images_dir, args.heatmaps_dir)
     except (ValueError, OSError, KeyError) as error:
         parser.error(str(error))
 

@@ -14,7 +14,39 @@ FEATURE_NAMES = [
     "area", "perimeter", "diameter", "pca_lambda1", "pca_lambda2",
     "pca_ratio", "distance_to_solar_center", "solidity", "extent",
     "eccentricity", "skeleton_length", "area_per_skeleton_length",
+    "mean_probability", "median_probability", "probability_p90", "probability_p10",
+    "mean_grey_level", "grey_border_contrast", "probability_border_contrast", "pca_axis_angle",
 ]
+
+
+BORDER_RADIUS = 3
+
+
+def image_index(images_dir):
+    if images_dir is None or not images_dir.is_dir():
+        raise ValueError("Provide --images-dir containing the source images")
+    paths = {}
+    for path in images_dir.iterdir():
+        if path.is_file() and path.suffix.lower() in {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"}:
+            if path.stem in paths:
+                raise ValueError(f"Ambiguous source image stem: {path.stem}")
+            paths[path.stem] = path
+    return paths
+
+
+def load_feature_maps(stem, images, heatmaps_dir):
+    if stem not in images:
+        raise ValueError(f"Missing source image: {stem}")
+    if heatmaps_dir is None:
+        raise ValueError("Provide --heatmaps-dir containing exported .npy heatmaps")
+    image = cv2.imread(str(images[stem]), cv2.IMREAD_GRAYSCALE)
+    heatmap = np.load(heatmaps_dir / f"{stem}.npy", allow_pickle=False)
+    if image is None or image.shape != IMAGE_SIZE or heatmap.shape != IMAGE_SIZE:
+        raise ValueError(f"Expected image and heatmap at {IMAGE_SIZE}: {stem}")
+    if (not np.issubdtype(heatmap.dtype, np.number) or np.iscomplexobj(heatmap)
+            or not np.isfinite(heatmap).all() or heatmap.min() < 0 or heatmap.max() > 1):
+        raise ValueError(f"Heatmap must contain finite probabilities in [0, 1]: {stem}")
+    return image.astype(np.float32) / 255., heatmap.astype(np.float32, copy=False)
 
 
 def read_candidates(path):
@@ -38,13 +70,28 @@ def read_candidates(path):
     return candidates
 
 
-def extract_features(rle):
+def extract_features(rle, image, heatmap):
+    if image.shape != IMAGE_SIZE or heatmap.shape != IMAGE_SIZE:
+        raise ValueError("Feature maps must match the native candidate resolution")
     if tuple(rle["size"]) != IMAGE_SIZE:
         raise ValueError("Incorrect candidate mask dimensions")
     mask = mask_utils.decode(rle)
     x, y, width, height = mask_utils.toBbox(rle).astype(int)
     if width <= 0 or height <= 0:
         raise ValueError("Empty candidate")
+    x0, y0 = max(0, x - BORDER_RADIUS), max(0, y - BORDER_RADIUS)
+    x1, y1 = min(IMAGE_SIZE[1], x + width + BORDER_RADIUS), min(IMAGE_SIZE[0], y + height + BORDER_RADIUS)
+    local_mask = np.ascontiguousarray(mask[y0:y1, x0:x1])
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * BORDER_RADIUS + 1,) * 2)
+    ring = (cv2.dilate(local_mask, kernel) != 0) & (local_mask == 0)
+    inside = local_mask != 0
+    local_image, local_heatmap = image[y0:y1, x0:x1], heatmap[y0:y1, x0:x1]
+    probabilities = local_heatmap[inside]
+    mean_probability = float(probabilities.mean())
+    mean_grey = float(local_image[inside].mean())
+    grey_contrast = mean_grey - float(local_image[ring].mean()) if ring.any() else 0.
+    probability_contrast = mean_probability - float(local_heatmap[ring].mean()) if ring.any() else 0.
+    p10, p90 = np.percentile(probabilities, [10, 90])
     mask = np.ascontiguousarray(mask[y:y + height, x:x + width])
     moments = cv2.moments(mask, binaryImage=True)
     area = moments["m00"]
@@ -53,7 +100,10 @@ def extract_features(rle):
     center = np.array([moments["m10"], moments["m01"]]) / area
     covariance = np.array([[moments["mu20"], moments["mu11"]],
                            [moments["mu11"], moments["mu02"]]]) / area
-    lambda2, lambda1 = np.maximum(np.linalg.eigvalsh(covariance), 0)
+    eigenvalues, eigenvectors = np.linalg.eigh(covariance)
+    lambda2, lambda1 = np.maximum(eigenvalues, 0)
+    direction = eigenvectors[:, -1]
+    axis_angle = float(np.arctan2(direction[1], direction[0]) % np.pi) if lambda1 - lambda2 > 1e-12 else 0.
     contours, _ = cv2.findContours(mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
     perimeter = sum(cv2.arcLength(contour, True) for contour in contours)
     hull = cv2.convexHull(np.concatenate(contours)).reshape(-1, 2).astype(np.float64)
@@ -72,6 +122,8 @@ def extract_features(rle):
         area / hull_area, area / (width * height),
         np.sqrt(max(0., 1 - lambda2 / lambda1)) if lambda1 > 0 else 0.,
         skeleton_length, area / max(skeleton_length, 1),
+        mean_probability, np.median(probabilities), p90, p10, mean_grey,
+        grey_contrast, probability_contrast, axis_angle,
     ], dtype=np.float64)
 
 
@@ -98,8 +150,8 @@ def prepare_classifier(model):
     if model.get("model_type") == "pair_mlp":
         from filament_merge import PAIR_FEATURE_NAMES
         names = PAIR_FEATURE_NAMES
-    if model.get("version") not in (2, 3) or model.get("feature_names") != names:
-        raise ValueError("Unsupported classifier or feature schema; retrain with geometry-only features")
+    if model.get("version") != 4 or model.get("feature_names") != names:
+        raise ValueError("Unsupported classifier or feature schema; retrain with the current image and probability features")
     kind = model.get("model_type", "logistic")
     if kind not in ("logistic", "mlp", "pair_mlp"):
         raise ValueError("Unsupported classifier type")

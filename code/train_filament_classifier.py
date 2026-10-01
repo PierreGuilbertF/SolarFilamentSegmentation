@@ -11,7 +11,7 @@ from sklearn.exceptions import ConvergenceWarning
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 
-from filament_classifier import FEATURE_NAMES, build_mlp, extract_features, read_candidates
+from filament_classifier import FEATURE_NAMES, build_mlp, extract_features, image_index, load_feature_maps, read_candidates
 from segmentation_utils import annotation_to_rle, load_annotations
 
 
@@ -78,7 +78,7 @@ def train_merge(candidates, records_by_stem, annotations, features, output_dir,
     print("Training pair merge MLP on CPU...", flush=True)
     fit_started = perf_counter()
     history = fit_network(network, x, labels, epochs, learning_rate, batch_size, weight_decay)
-    model = dict(version=3, model_type="pair_mlp", feature_names=PAIR_FEATURE_NAMES,
+    model = dict(version=4, model_type="pair_mlp", feature_names=PAIR_FEATURE_NAMES,
                  mean=scaler.mean_.tolist(), scale=scaler.scale_.tolist(),
                  state_dict={key: value.detach().cpu().tolist() for key, value in network.state_dict().items()},
                  purity_threshold=0.7, default_threshold=0.5,
@@ -89,7 +89,7 @@ def train_merge(candidates, records_by_stem, annotations, features, output_dir,
 
 
 def run(candidates_path, annotations_path, output_dir, regularization_c=0.5,
-        model_type="mlp", epochs=300, learning_rate=1e-3, batch_size=256, weight_decay=1e-4, seed=42, merge=True):
+        model_type="mlp", epochs=300, learning_rate=1e-3, batch_size=256, weight_decay=1e-4, seed=42, merge=True, images_dir=None, heatmaps_dir=None):
     if not np.isfinite(regularization_c) or regularization_c <= 0:
         raise ValueError("C must be finite and positive")
     if model_type not in ("mlp", "logistic"):
@@ -100,6 +100,9 @@ def run(candidates_path, annotations_path, output_dir, regularization_c=0.5,
         raise ValueError("weight_decay must be finite and nonnegative")
     started = perf_counter()
     print("Loading candidates...", flush=True)
+    images = image_index(images_dir)
+    if heatmaps_dir is None or not heatmaps_dir.is_dir():
+        raise ValueError("Provide --heatmaps-dir containing exported .npy heatmaps")
     candidates = read_candidates(candidates_path)
     records, annotations = load_annotations(annotations_path)
     records_by_stem = {Path(name).stem: entries for name, entries in records.items()}
@@ -109,18 +112,19 @@ def run(candidates_path, annotations_path, output_dir, regularization_c=0.5,
     if unknown:
         raise ValueError(f"Candidates without annotations: {sorted(unknown)[:5]}")
     features, labels, rows = [], [], []
-    for image_index, (stem, entries) in enumerate(candidates.items(), 1):
+    for image_number, (stem, entries) in enumerate(candidates.items(), 1):
+        image, heatmap = load_feature_maps(stem, images, heatmaps_dir)
         gt = [annotation_to_rle(a) for record in records_by_stem[stem]
               for a in annotations[record["id"]]]
         best_ious = (mask_utils.iou([rle for _, rle in entries], gt, [0] * len(gt)).max(axis=1)
                      if gt else np.zeros(len(entries)))
         for (identifier, rle), best_iou in zip(entries, best_ious):
-            vector = extract_features(rle)
+            vector = extract_features(rle, image, heatmap)
             label = int(best_iou > 0.5)
             features.append(vector)
             labels.append(label)
             rows.append([identifier, best_iou, label, *vector])
-        print(f"[{image_index}/{len(candidates)}] {stem}: {len(entries)} candidates | "
+        print(f"[{image_number}/{len(candidates)}] {stem}: {len(entries)} candidates | "
               f"Elapsed: {perf_counter() - started:.1f}s", flush=True)
     feature_seconds = perf_counter() - started
     if len(set(labels)) != 2:
@@ -129,7 +133,7 @@ def run(candidates_path, annotations_path, output_dir, regularization_c=0.5,
     x = scaler.fit_transform(np.asarray(features))
     fit_started = perf_counter()
     model = {
-        "version": 3, "model_type": model_type, "feature_names": FEATURE_NAMES,
+        "version": 4, "model_type": model_type, "feature_names": FEATURE_NAMES,
         "mean": scaler.mean_.tolist(), "scale": scaler.scale_.tolist(),
         "positive_class": 1, "label_iou_threshold": 0.5, "default_threshold": 0.5,
     }
@@ -191,10 +195,12 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--merge", action=argparse.BooleanOptionalAction, default=True,
                         help="Train pair merging after filtering (default: enabled).")
+    parser.add_argument("--images-dir", type=Path, required=True)
+    parser.add_argument("--heatmaps-dir", type=Path, required=True)
     args = parser.parse_args()
     try:
         run(args.candidates, args.annotations, args.output_dir, args.C, args.model_type,
-            args.epochs, args.learning_rate, args.batch_size, args.weight_decay, args.seed, args.merge)
+            args.epochs, args.learning_rate, args.batch_size, args.weight_decay, args.seed, args.merge, args.images_dir, args.heatmaps_dir)
     except (ValueError, OSError, KeyError, ConvergenceWarning) as error:
         parser.error(str(error))
 

@@ -220,11 +220,11 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path,
     )
 
     # Learning rate scheduler
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        adam_optimizer,
-        T_max=num_epochs * len(train_dataloader),
-        eta_min=config_payload.get("min_learning_rate", 0.0),
-    )
+    #scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    #    adam_optimizer,
+    #    T_max=num_epochs * len(train_dataloader),
+    #    eta_min=config_payload.get("min_learning_rate", 0.0),
+    #)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     training_report = []
@@ -252,7 +252,7 @@ def train_model(config: Path, training_set_payload: Path, output_dir: Path,
             loss.backward()
             learning_rate = adam_optimizer.param_groups[0]["lr"]
             adam_optimizer.step()
-            scheduler.step()
+            #scheduler.step()
 
             total_loss += loss.detach() * images.size(0)
             num_samples += images.size(0)

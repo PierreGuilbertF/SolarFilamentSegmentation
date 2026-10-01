@@ -48,10 +48,10 @@ class SolarFilamentDatasetLoader(Dataset):
             raise ValueError("annotation_sampling must be random or all")
         self.annotation_sampling = annotation_sampling
         self.augment = augment
-        self.geometric_augmentation = RandomAffine(degrees=4, translate=(0.04, 0.04), )
+        self.geometric_augmentation = RandomAffine(degrees=5, translate=(0.08, 0.08), )
         self.photometric_augmentation = ColorJitter(
-            brightness=0.20,
-            contrast=0.30,
+            brightness=0.25,
+            contrast=0.35,
         )
         with config_payload.open(encoding="utf-8") as file:
             config = json.load(file)
@@ -74,8 +74,8 @@ class SolarFilamentDatasetLoader(Dataset):
 
         self.mask_height = self.input_height // stride
         self.mask_width = self.input_width // stride
-        self.elastic_probability = float(config.get("elastic_probability", 0.25))
-        self.elastic_alpha = float(config.get("elastic_alpha", 10.0))
+        self.elastic_probability = float(config.get("elastic_probability", 0.50))
+        self.elastic_alpha = float(config.get("elastic_alpha", 20.0))
         self.elastic_sigma = float(config.get("elastic_sigma", 4.0))
         if not 0 <= self.elastic_probability <= 1:
             raise ValueError("elastic_probability must be between 0 and 1")
@@ -185,19 +185,19 @@ class SolarFilamentDatasetLoader(Dataset):
         # Brightness + contrast
         image = self.photometric_augmentation(image)
         # Gamma
-        gamma = torch.empty(()).uniform_(0.9, 1.1).item()
+        gamma = torch.empty(()).uniform_(0.85, 1.15).item()
         image = TF.adjust_gamma(image, gamma=gamma)
         # Low frequency photogrammetric perturbations
         # Model clouds etc
-        image = low_freq_field(image, scale=32, amplitude_max=0.075)
+        image = low_freq_field(image, scale=32, amplitude_max=0.095)
         # Gaussian blur, modeling atmospher seeing blur
-        sigma = torch.empty(()).uniform_(0.1, 1.4).item()
+        sigma = torch.empty(()).uniform_(0.1, 1.5).item()
         image = TF.gaussian_blur(image, kernel_size=7, sigma=sigma)
         # Sensor noise modeled with Poisson Distribution
         peak = 10 ** torch.empty(()).uniform_(4.3, 5.2).item()
         image = torch.poisson(image.clamp(0, 1) * peak) / peak
         # Sensor reading noise
-        sigma_read = torch.empty(()).uniform_(0.00005, 0.0005).item()
+        sigma_read = torch.empty(()).uniform_(0.00005, 0.00075).item()
         image = image + torch.randn_like(image) * sigma_read
         image = image.clamp(0, 1)
 
